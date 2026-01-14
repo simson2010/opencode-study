@@ -35,49 +35,87 @@ interface MessagePart {
 }
 
  class LLMInterceptor {
-   private sessions: Map<string, SessionData>
-   private baseLogDir: string
-   private fileHandles: Map<string, number>
+    private sessions: Map<string, SessionData>
+    private baseLogDir: string
+    private fileHandles: Map<string, number>
+    private currentRoundID: string | null
+    private roundLogsDir: string
 
-   constructor(baseLogDir: string = "./logs/sessions") {
-     this.sessions = new Map()
-     this.fileHandles = new Map()
-     this.baseLogDir = baseLogDir
-     this.ensureSessionDir()
-   }
+    constructor(baseLogDir: string = "./logs/sessions") {
+      this.sessions = new Map()
+      this.fileHandles = new Map()
+      this.baseLogDir = baseLogDir
+      this.currentRoundID = null
+      this.roundLogsDir = `${baseLogDir}/rounds`
+      this.ensureSessionDir()
+      this.ensureRoundsDir()
+    }
 
-   private ensureSessionDir() {
-     try {
-       Bun.mkdir(this.baseLogDir, { recursive: true })
-     } catch (e) {
-       // Directory already exists or error occurred, continue
-     }
-   }
+    private ensureSessionDir() {
+      try {
+        Bun.mkdir(this.baseLogDir, { recursive: true })
+      } catch (e) {
+        // Directory already exists or error occurred, continue
+      }
+    }
 
-   private getLogFile(sessionID: string): string {
-     return `${this.baseLogDir}/${sessionID}.jsonl`
-   }
+    private ensureRoundsDir() {
+      try {
+        Bun.mkdir(this.roundLogsDir, { recursive: true })
+      } catch (e) {
+        // Directory already exists or error occurred, continue
+      }
+    }
 
-   private async log(type: "command" | "response" | "tool" | "event", data: any, sessionID: string) {
-     if (!this.sessions.has(sessionID)) {
-       this.sessions.set(sessionID, {
-         sessionID,
-         startTime: Date.now(),
-         tools: 0,
-       })
-     }
+    private getLogFile(sessionID: string): string {
+      return `${this.baseLogDir}/${sessionID}.jsonl`
+    }
 
-     const entry: SessionLogEntry = {
-       timestamp: Date.now(),
-       type,
-       data,
-     }
+    private getRoundLogFile(roundID: string): string {
+      return `${this.roundLogsDir}/${roundID}.jsonl`
+    }
 
-      const logFile = this.getLogFile(sessionID)
-      const logLine = JSON.stringify(entry) + "\n"
+    private generateRoundID(): string {
+      return `round-${Date.now()}-${Math.random().toString(36).substring(2, 11)}`
+    }
 
-      await Bun.write(logFile, logLine, { createPath: true, append: true })
-   }
+    private startNewRound(): string {
+      this.currentRoundID = this.generateRoundID()
+      return this.currentRoundID
+    }
+
+    private getCurrentRoundID(): string | null {
+      return this.currentRoundID
+    }
+
+    private endRound() {
+      this.currentRoundID = null
+    }
+
+    private async log(type: "command" | "response" | "tool" | "event", data: any, sessionID: string) {
+      if (!this.sessions.has(sessionID)) {
+        this.sessions.set(sessionID, {
+          sessionID,
+          startTime: Date.now(),
+          tools: 0,
+        })
+      }
+
+      const entry: SessionLogEntry = {
+        timestamp: Date.now(),
+        type,
+        data,
+      }
+
+       const logLine = JSON.stringify(entry) + "\n"
+       const roundID = this.getCurrentRoundID()
+
+       await Bun.write(this.getLogFile(sessionID), logLine, { createPath: true, append: true })
+
+       if (roundID) {
+         await Bun.write(this.getRoundLogFile(roundID), logLine, { createPath: true, append: true })
+       }
+    }
 
   public getSession(sessionID: string): SessionData | undefined {
     return this.sessions.get(sessionID)
@@ -136,23 +174,27 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
       }))
 
       const command = interceptor.extractUserCommand(output.messages as any)
+      const roundID = interceptor.startNewRound()
+      
+      await interceptor.log("command", {
+        hook: "experimental.chat.messages.transform",
+        type: "command",
+        roundID: roundID,
+        messageCount: messages.length,
+        command: command,
+        messages: messages,
+      }, sessionID)
+      
       const session = interceptor.getSession(sessionID)
       if (session) {
         session.command = command
         session.tools = 0
       }
-
-      await interceptor.log("command", {
-        hook: "experimental.chat.messages.transform",
-        type: "command",
-        messageCount: messages.length,
-        command: command,
-        messages: messages,
-      }, sessionID)
     },
 
     "experimental.text.complete": async (input, output) => {
       const sessionID = input.sessionID || "default"
+      const roundID = interceptor.getCurrentRoundID()
       const session = interceptor.getSession(sessionID)
       
       if (session) {
@@ -163,13 +205,17 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
       await interceptor.log("response", {
         hook: "experimental.text.complete",
         type: "response",
+        roundID: roundID,
         text: output.text,
         length: output.text.length,
       }, sessionID)
+      
+      interceptor.endRound()
     },
 
     "tool.execute.before": async (input, output) => {
       const sessionID = input.sessionID || "default"
+      const roundID = interceptor.getCurrentRoundID()
       const session = interceptor.getSession(sessionID)
       
       if (session) {
@@ -179,6 +225,7 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
       await interceptor.log("tool", {
         hook: "tool.execute.before",
         type: "tool",
+        roundID: roundID,
         tool: input.tool,
         args: output.args,
         callID: input.callID,
@@ -187,9 +234,11 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
 
     "tool.execute.after": async (input, output) => {
       const sessionID = input.sessionID || "default"
+      const roundID = interceptor.getCurrentRoundID()
       await interceptor.log("tool", {
         hook: "tool.execute.after",
         type: "tool",
+        roundID: roundID,
         tool: input.tool,
         result: {
           title: output.title,
@@ -202,11 +251,13 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
 
     event: async ({ event }) => {
       const sessionID = event.sessionID || "default"
+      const roundID = interceptor.getCurrentRoundID()
       const payload = event.payload
 
       if (payload.type === "text-delta") {
         await interceptor.log("event", {
           type: "text-delta",
+          roundID: roundID,
           text: payload.text,
           messageID: payload.messageID,
           partID: payload.partID,
@@ -214,6 +265,7 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
       } else if (payload.type === "tool-call") {
         await interceptor.log("event", {
           type: "tool-call",
+          roundID: roundID,
           toolName: payload.toolName,
           input: payload.input,
           messageID: payload.messageID,
@@ -222,6 +274,7 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
       } else if (payload.type === "tool-result") {
         await interceptor.log("event", {
           type: "tool-result",
+          roundID: roundID,
           output: payload.output,
           messageID: payload.messageID,
           partID: payload.partID,
@@ -237,6 +290,7 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
 
         await interceptor.log("event", {
           type: "step-finish",
+          roundID: roundID,
           tokens: payload.tokens,
           cost: payload.cost,
           finish: payload.finish,
