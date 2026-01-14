@@ -1,0 +1,6 @@
+{
+  "plugin": [
+    "./plugins/full-llm-interceptor.ts"
+  ],
+  "$schema": "https://opencode.ai/config.json"
+}

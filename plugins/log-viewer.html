@@ -1,0 +1,961 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>OpenCode Log Viewer</title>
+  <script src="https://cdn.jsdelivr.net/npm/vue@3/dist/vue.global.js"></script>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      --bg-primary: #1e1e1e;
+      --bg-secondary: #252526;
+      --bg-tertiary: #2d2d2d;
+      --text-primary: #d4d4d4;
+      --text-secondary: #858585;
+      --accent-blue: #007acc;
+      --accent-green: #4ec9b0;
+      --accent-purple: #c586c0;
+      --accent-yellow: #dcdcaa;
+      --border-color: #3c3c3c;
+    }
+
+    body {
+      font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+      margin: 0;
+      padding: 0;
+      background: var(--bg-primary);
+      color: var(--text-primary);
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #app {
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+    }
+
+    .header {
+      padding: 15px 20px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    h1 {
+      margin: 0;
+      color: var(--accent-green);
+      font-size: 18px;
+    }
+
+    .controls {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    button {
+      padding: 6px 12px;
+      background: var(--accent-blue);
+      color: white;
+      border: none;
+      border-radius: 3px;
+      cursor: pointer;
+      font-family: inherit;
+      font-size: 13px;
+    }
+
+    button:hover {
+      background: #005a9e;
+    }
+
+    button.active {
+      background: #0e639c;
+      box-shadow: inset 0 0 0 2px #9cdcfe;
+    }
+
+    select {
+      padding: 6px 12px;
+      background: var(--bg-tertiary);
+      color: var(--text-primary);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      font-family: inherit;
+      font-size: 13px;
+      min-width: 200px;
+    }
+
+    input[type="text"] {
+      padding: 6px 10px;
+      background: var(--bg-tertiary);
+      border: 1px solid var(--border-color);
+      border-radius: 3px;
+      color: var(--text-primary);
+      font-family: inherit;
+      font-size: 13px;
+      width: 200px;
+    }
+
+    input[type="text"]:focus,
+    select:focus {
+      outline: none;
+      border-color: var(--accent-blue);
+    }
+
+    .main-container {
+      display: flex;
+      flex: 1;
+      overflow: hidden;
+    }
+
+    .sidebar {
+      width: 350px;
+      background: var(--bg-secondary);
+      border-right: 1px solid var(--border-color);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    .sidebar-header {
+      padding: 10px;
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .tree-container {
+      flex: 1;
+      overflow-y: auto;
+      padding: 10px 0;
+    }
+
+    .tree-node {
+      padding: 4px 8px;
+      cursor: pointer;
+      user-select: none;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+    }
+
+    .tree-node:hover {
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .tree-node.selected {
+      background: rgba(0, 122, 204, 0.3);
+    }
+
+    .tree-toggle {
+      width: 16px;
+      height: 16px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text-secondary);
+      font-size: 10px;
+      transition: transform 0.15s;
+    }
+
+    .tree-toggle.expanded {
+      transform: rotate(90deg);
+    }
+
+    .tree-toggle.invisible {
+      visibility: hidden;
+    }
+
+    .tree-icon {
+      font-size: 12px;
+      color: var(--accent-yellow);
+    }
+
+    .tree-key {
+      color: var(--text-primary);
+    }
+
+    .tree-count {
+      color: var(--text-secondary);
+      font-size: 11px;
+      margin-left: auto;
+    }
+
+    .tree-children {
+      padding-left: 20px;
+    }
+
+    .main-panel {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      background: var(--bg-primary);
+    }
+
+    .detail-header {
+      padding: 10px 15px;
+      background: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .display-modes {
+      display: flex;
+      gap: 5px;
+    }
+
+    .detail-content {
+      flex: 1;
+      overflow-y: auto;
+      padding: 15px;
+    }
+
+    .breadcrumb {
+      color: var(--text-secondary);
+      font-size: 12px;
+      margin-bottom: 10px;
+    }
+
+    .breadcrumb span {
+      color: var(--accent-blue);
+    }
+
+    pre {
+      margin: 0;
+      font-size: 13px;
+      line-height: 1.5;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+    }
+
+    .keyword {
+      color: #569cd6;
+    }
+
+    .string {
+      color: #ce9178;
+    }
+
+    .number {
+      color: #b5cea8;
+    }
+
+    .boolean {
+      color: #569cd6;
+    }
+
+    .null {
+      color: #569cd6;
+    }
+
+    .data-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .data-table th,
+    .data-table td {
+      padding: 8px 12px;
+      text-align: left;
+      border: 1px solid var(--border-color);
+    }
+
+    .data-table th {
+      background: var(--bg-tertiary);
+      color: var(--accent-blue);
+      font-weight: normal;
+    }
+
+    .data-table tr:hover {
+      background: rgba(255, 255, 255, 0.03);
+    }
+
+    .formatted-view {
+      line-height: 1.8;
+    }
+
+    .formatted-key {
+      color: var(--accent-green);
+      margin-right: 8px;
+    }
+
+    .formatted-value {
+      color: var(--text-primary);
+    }
+
+    .stats {
+      display: flex;
+      gap: 15px;
+      padding: 8px 15px;
+      background: var(--bg-tertiary);
+      border-bottom: 1px solid var(--border-color);
+      font-size: 12px;
+    }
+
+    .stat {
+      display: flex;
+      align-items: center;
+      gap: 5px;
+    }
+
+    .stat-label {
+      color: var(--text-secondary);
+    }
+
+    .stat-value {
+      color: var(--accent-green);
+      font-weight: bold;
+    }
+
+    .no-selection {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-secondary);
+    }
+
+    .no-selection-icon {
+      font-size: 48px;
+      margin-bottom: 15px;
+      opacity: 0.5;
+    }
+
+    .loading {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      height: 100%;
+      color: var(--text-secondary);
+    }
+
+    .empty-state {
+      padding: 20px;
+      text-align: center;
+      color: var(--text-secondary);
+    }
+
+    .error-message {
+      padding: 15px;
+      background: rgba(196, 43, 28, 0.2);
+      border: 1px solid #c53030;
+      border-radius: 3px;
+      color: #f87171;
+      margin: 10px;
+    }
+  </style>
+</head>
+<body>
+  <div id="app">
+    <div class="header">
+      <h1>OpenCode Log Viewer</h1>
+      <div class="controls">
+        <select v-model="selectedSessionId" @change="loadSession">
+          <option value="">Select Session...</option>
+          <option v-for="session in sessions" :key="session.sessionID" :value="session.sessionID">
+            {{ session.displayName }}
+          </option>
+        </select>
+        <button @click="loadSessions" title="Reload sessions">↻</button>
+        <input type="text" v-model="treeSearch" placeholder="Search keys...">
+      </div>
+    </div>
+
+    <div class="main-container">
+      <div class="sidebar">
+        <div class="sidebar-header">
+          <span>Tree Browser</span>
+          <button @click="expandAll(true)" title="Expand All">+</button>
+          <button @click="expandAll(false)" title="Collapse All">−</button>
+        </div>
+        <div class="tree-container">
+          <div v-if="!selectedSessionId" class="empty-state">
+            Select a session to view its keys
+          </div>
+          <div v-else-if="loadingSession" class="loading">
+            Loading...
+          </div>
+          <div v-else-if="errorMessage" class="error-message">
+            {{ errorMessage }}
+          </div>
+          <div v-else-if="filteredTree.children && filteredTree.children.length === 0" class="empty-state">
+            No keys found
+          </div>
+          <tree-node
+            v-else-if="filteredTree.children"
+            :node="filteredTree"
+            :selected-path="selectedPath"
+            :search="treeSearch"
+            :expanded-nodes="expandedNodes"
+            :on-select="selectNode"
+            :on-toggle="(key, val) => val ? expandedNodes.add(key) : expandedNodes.delete(key)"
+          ></tree-node>
+        </div>
+      </div>
+
+      <div class="main-panel">
+        <div class="stats" v-if="stats.total > 0">
+          <div class="stat"><span class="stat-label">Entries:</span><span class="stat-value">{{ stats.total }}</span></div>
+          <div class="stat"><span class="stat-label">Commands:</span><span class="stat-value">{{ stats.commands }}</span></div>
+          <div class="stat"><span class="stat-label">Responses:</span><span class="stat-value">{{ stats.responses }}</span></div>
+          <div class="stat"><span class="stat-label">Tools:</span><span class="stat-value">{{ stats.tools }}</span></div>
+          <div class="stat"><span class="stat-label">Events:</span><span class="stat-value">{{ stats.events }}</span></div>
+        </div>
+
+        <div class="detail-header" v-if="selectedNode">
+          <div class="display-modes">
+            <button @click="displayMode = 'json'" :class="{ active: displayMode === 'json' }">JSON</button>
+            <button @click="displayMode = 'formatted'" :class="{ active: displayMode === 'formatted' }">Formatted</button>
+            <button @click="displayMode = 'table'" :class="{ active: displayMode === 'table' }" v-if="canShowTable">Table</button>
+          </div>
+          <button @click="copyData" title="Copy to clipboard">Copy</button>
+        </div>
+
+        <div class="detail-content">
+          <div v-if="!selectedNode" class="no-selection">
+            <div class="no-selection-icon">📂</div>
+            <div>Select a key from the tree to view its data</div>
+          </div>
+          <div v-else-if="displayData === null || displayData === undefined" class="no-selection">
+            <div class="no-selection-icon">⚠️</div>
+            <div>No data available for this key</div>
+            <div style="margin-top: 10px; font-size: 12px;">Check browser console for debug info (F12)</div>
+          </div>
+          <div v-else>
+            <div class="breadcrumb">
+              Root {{ selectedNode.path && selectedNode.path.length > 0 ? '/ ' + selectedNode.path.join(' / ') : '' }}
+            </div>
+            <div v-if="displayMode === 'json'">
+              <pre><code v-html="highlightJson(JSON.stringify(displayData, null, 2))"></code></pre>
+            </div>
+            <div v-else-if="displayMode === 'formatted'" class="formatted-view">
+              <formatted-view :data="displayData" :indent="0"></formatted-view>
+            </div>
+            <div v-else-if="displayMode === 'table'">
+              <table class="data-table">
+                <thead>
+                  <tr><th>Field</th><th>Value</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="[key, value] in Object.entries(displayData)" :key="key">
+                    <td>{{ key }}</td>
+                    <td>{{ typeof value === 'object' ? JSON.stringify(value) : String(value) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const { createApp, ref, computed, h, onMounted } = Vue
+
+    const TreeNode = {
+      name: 'TreeNode',
+      props: ['node', 'selectedPath', 'search', 'level', 'expandedNodes', 'onSelect', 'onToggle'],
+      setup(props) {
+        const level = props.level || 0
+
+        const isLeaf = computed(() => !props.node.children || props.node.children.length === 0)
+
+        const nodeKey = computed(() => {
+          return (props.node.path || []).join('/')
+        })
+
+        const expanded = computed({
+          get: () => props.expandedNodes && props.expandedNodes.has(nodeKey.value),
+          set: (value) => {
+            if (props.onToggle) props.onToggle(nodeKey.value, value)
+          }
+        })
+
+        const shouldShow = computed(() => {
+          if (!props.search) return true
+          const searchLower = props.search.toLowerCase()
+          const keyMatch = props.node.key.toLowerCase().includes(searchLower)
+          if (keyMatch) return true
+          if (props.node.children) {
+            return props.node.children.some(child => child.key.toLowerCase().includes(searchLower))
+          }
+          return false
+        })
+
+        const filteredChildren = computed(() => {
+          if (!props.node.children) return []
+          if (!props.search) return props.node.children
+          const searchLower = props.search.toLowerCase()
+          return props.node.children.filter(child => {
+            if (child.key.toLowerCase().includes(searchLower)) return true
+            if (child.children) {
+              return child.children.some(c => c.key.toLowerCase().includes(searchLower))
+            }
+            return false
+          })
+        })
+
+        const toggle = () => {
+          if (!isLeaf.value && props.onToggle) {
+            props.onToggle(nodeKey.value, !expanded.value)
+          }
+        }
+
+        const select = () => {
+          if (props.onSelect) props.onSelect(props.node)
+        }
+
+        const isSelected = computed(() => {
+          return props.selectedPath.length === level + 1 &&
+                 props.selectedPath[level] === props.node.key
+        })
+
+        return () => {
+          if (!shouldShow.value) return null
+
+          return h('div', { class: 'tree-group' }, [
+            h('div', {
+              class: ['tree-node', { selected: isSelected.value }],
+              onClick: select,
+              style: { paddingLeft: `${level * 16}px` }
+            }, [
+              h('span', {
+                class: ['tree-toggle', { expanded: expanded.value, invisible: isLeaf.value }],
+                onClick: (e) => { e.stopPropagation(); toggle() }
+              }, '▶'),
+              h('span', { class: 'tree-icon' }, props.node.type === 'array' ? '[]' : '{}'),
+              h('span', { class: 'tree-key' }, props.node.key),
+              props.node.entries && h('span', { class: 'tree-count' }, `(${props.node.entries.length})`)
+            ]),
+            expanded.value && filteredChildren.value.length > 0 && h('div', { class: 'tree-children' },
+              filteredChildren.value.map(child =>
+                h(TreeNode, {
+                  key: child.key,
+                  node: child,
+                  selectedPath: props.selectedPath,
+                  search: props.search,
+                  level: level + 1,
+                  expandedNodes: props.expandedNodes,
+                  onSelect: props.onSelect,
+                  onToggle: props.onToggle
+                })
+              )
+            )
+          ])
+        }
+      }
+    }
+
+    const FormattedView = {
+      name: 'FormattedView',
+      props: ['data', 'indent'],
+      setup(props) {
+        const indent = props.indent || 0
+        const prefix = '  '.repeat(indent)
+
+        return () => {
+          if (props.data === null) {
+            return h('div', [h('span', { class: 'null' }, 'null')])
+          }
+          if (Array.isArray(props.data)) {
+            return h('div', [
+              h('span', '['),
+              props.data.map((item, i) => h('div', { style: { marginLeft: '20px' } }, [
+                h(FormattedView, { data: item, indent: indent + 1 }),
+                i < props.data.length - 1 && ','
+              ])),
+              h('div', { style: { marginLeft: `${indent * 20}px` } }, [h('span', ']')])
+            ])
+          }
+          if (typeof props.data === 'object') {
+            return h('div',
+              Object.entries(props.data).map(([key, value]) =>
+                h('div', [
+                  h('span', { class: 'formatted-key' }, `${prefix}${key}:`),
+                  h('span', { class: 'formatted-value' }, [
+                    typeof value === 'object'
+                      ? h(FormattedView, { data: value, indent: indent + 1 })
+                      : h('span', { class: typeof value === 'string' ? 'string' : typeof value === 'number' ? 'number' : 'boolean' }, String(value))
+                  ])
+                ])
+              )
+            )
+          }
+          const type = typeof props.data
+          return h('span', { class: type }, String(props.data))
+        }
+      }
+    }
+
+    createApp({
+      components: { TreeNode, FormattedView },
+      setup() {
+        const sessions = ref([])
+        const selectedSessionId = ref('')
+        const entries = ref([])
+        const tree = ref(null)
+        const selectedNode = ref(null)
+        const selectedPath = ref([])
+        const displayMode = ref('json')
+        const treeSearch = ref('')
+        const loadingSession = ref(false)
+        const errorMessage = ref('')
+
+        const loadSessions = async () => {
+          try {
+            const basePath = 'logs/sessions/'
+            const response = await fetch(basePath)
+            if (!response.ok) throw new Error('Failed to list sessions')
+
+            const html = await response.text()
+            const parser = new DOMParser()
+            const doc = parser.parseFromString(html, 'text/html')
+            const links = doc.querySelectorAll('a')
+
+            const files = []
+            for (const link of links) {
+              const href = link.getAttribute('href')
+              if (href && href.endsWith('.jsonl')) {
+                const name = href.replace(/\/$/, '')
+                files.push({
+                  name,
+                  sessionID: name.replace('.jsonl', ''),
+                  displayName: name.replace('.jsonl', '').substring(0, 20),
+                  path: `${basePath}${name}`
+                })
+              }
+            }
+
+            sessions.value = files.sort((a, b) => a.name.localeCompare(b.name))
+          } catch (e) {
+            console.error('Failed to load sessions:', e)
+            errorMessage.value = `Failed to load sessions: ${e.message}. Make sure you're running an HTTP server.`
+          }
+        }
+
+        const loadSession = async () => {
+          if (!selectedSessionId.value) {
+            entries.value = []
+            tree.value = null
+            selectedNode.value = null
+            errorMessage.value = ''
+            return
+          }
+
+          loadingSession.value = true
+          errorMessage.value = ''
+          selectedNode.value = null
+
+          try {
+            const session = sessions.value.find(s => s.sessionID === selectedSessionId.value)
+            if (!session) throw new Error('Session not found')
+
+            const response = await fetch(session.path)
+            if (!response.ok) throw new Error(`HTTP ${response.status}`)
+
+            const text = await response.text()
+            entries.value = parseJSONL(text)
+            tree.value = buildTree(entries.value)
+          } catch (e) {
+            console.error('Failed to load session:', e)
+            errorMessage.value = `Failed to load session: ${e.message}`
+            entries.value = []
+            tree.value = null
+          } finally {
+            loadingSession.value = false
+          }
+        }
+
+        const parseJSONL = (content) => {
+          return content.split('\n')
+            .filter(line => line.trim())
+            .map((line, index) => {
+              try {
+                const entry = JSON.parse(line)
+                return {
+                  ...entry,
+                  lineNumber: index + 1
+                }
+              } catch (e) {
+                console.error(`Failed to parse line ${index + 1}:`, e)
+                return null
+              }
+            })
+            .filter(Boolean)
+        }
+
+        const buildTree = (entries) => {
+          const allKeys = new Set()
+          entries.forEach(entry => {
+            Object.keys(entry).forEach(key => allKeys.add(key))
+          })
+
+          const children = Array.from(allKeys).sort().map(key => {
+            const type = getKeyDataType(entries, key)
+            const node = {
+              key,
+              type,
+              entries: entries.filter(e => key in e),
+              path: [key]
+            }
+
+            if (key === 'data') {
+              node.children = buildDataTree(entries)
+            }
+
+            return node
+          })
+
+          return {
+            key: 'Root',
+            type: 'object',
+            children,
+            entries,
+            path: []
+          }
+        }
+
+        const getKeyDataType = (entries, key) => {
+          for (const entry of entries) {
+            if (key in entry) {
+              const value = entry[key]
+              if (value === null) return 'null'
+              if (Array.isArray(value)) return 'array'
+              return typeof value
+            }
+          }
+          return 'string'
+        }
+
+        const buildDataTree = (entries) => {
+          const dataKeys = new Set()
+
+          entries.forEach(entry => {
+            if (entry.data && typeof entry.data === 'object') {
+              Object.keys(entry.data).forEach(key => dataKeys.add(key))
+            }
+          })
+
+          return Array.from(dataKeys).sort().map(key => ({
+            key,
+            type: getDataKeyType(entries, key),
+            entries: entries.filter(e => e.data && typeof e.data === 'object' && key in e.data),
+            path: ['data', key]
+          }))
+        }
+
+        const getDataKeyType = (entries, key) => {
+          for (const entry of entries) {
+            if (entry.data && typeof entry.data === 'object' && key in entry.data) {
+              const value = entry.data[key]
+              if (value === null) return 'null'
+              if (Array.isArray(value)) return 'array'
+              return typeof value
+            }
+          }
+          return 'string'
+        }
+
+        const filteredTree = computed(() => {
+          if (!tree.value) return { children: [] }
+          if (!treeSearch.value) return tree.value
+
+          const searchLower = treeSearch.value.toLowerCase()
+          const filterNode = (node) => {
+            if (!node.children) return node
+
+            const filteredChildren = node.children
+              .map(filterNode)
+              .filter(child => {
+                const keyMatch = child.key.toLowerCase().includes(searchLower)
+                if (keyMatch) return true
+                if (child.children) {
+                  return child.children.length > 0
+                }
+                return false
+              })
+
+            return { ...node, children: filteredChildren }
+          }
+
+          return filterNode(tree.value)
+        })
+
+        const selectNode = (node) => {
+          console.log('=== selectNode called ===')
+          console.log('Node key:', node.key)
+          console.log('Node path:', node.path)
+          console.log('Node entries count:', node.entries?.length)
+          console.log('Node entries sample:', node.entries?.[0])
+          selectedNode.value = node
+          selectedPath.value = node.path || []
+          displayMode.value = 'json'
+        }
+
+        const expandedNodes = ref(new Set())
+
+        const displayData = computed(() => {
+          if (!selectedNode.value || !selectedNode.value.entries || selectedNode.value.entries.length === 0) {
+            return null
+          }
+
+          const path = selectedNode.value.path || []
+          const entries = selectedNode.value.entries
+
+          console.log('displayData - path:', path, 'entries:', entries.length)
+
+          if (path.length === 0) {
+            return entries
+          }
+
+          const result = entries.map(entry => {
+            let value = entry
+            for (const key of path) {
+              if (value != null && typeof value === 'object' && key in value) {
+                value = value[key]
+              } else {
+                console.log(`Cannot traverse ${key}, value:`, value, 'key in value:', key in value)
+                value = null
+                break
+              }
+            }
+            return { timestamp: entry.timestamp, type: entry.type, value }
+          })
+
+          console.log('displayData result:', result)
+
+          if (entries.length === 1) {
+            const singleValue = result[0].value
+            console.log('Single entry, returning:', singleValue)
+            return singleValue
+          }
+
+          console.log('Multiple entries, returning array')
+          return result
+        })
+
+        const canShowTable = computed(() => {
+          const data = displayData.value
+          if (!data) return false
+          if (Array.isArray(data) && data.length > 1) return false
+          if (typeof data !== 'object' || data === null) return false
+          if (Array.isArray(data)) return false
+          return true
+        })
+
+        const stats = computed(() => {
+          const total = entries.value.length
+          return {
+            total,
+            commands: entries.value.filter(e => e.type === 'command').length,
+            responses: entries.value.filter(e => e.type === 'response').length,
+            tools: entries.value.filter(e => e.type === 'tool').length,
+            events: entries.value.filter(e => e.type === 'event').length
+          }
+        })
+
+        const highlightJson = (json) => {
+          return json
+            .replace(/("(\\u[a-zA-Z0-9]{4}|\\[^u]|[^\\"])*"(\s*:)?|\b(true|false|null)\b|-?\d+(?:\.\d*)?(?:[eE][+\-]?\d+)?)/g, (match) => {
+              let cls = 'number'
+              if (/^"/.test(match)) {
+                if (/:$/.test(match)) {
+                  cls = 'keyword'
+                } else {
+                  cls = 'string'
+                }
+              } else if (/true|false/.test(match)) {
+                cls = 'boolean'
+              } else if (/null/.test(match)) {
+                cls = 'null'
+              }
+              return '<span class="' + cls + '">' + match + '</span>'
+            })
+        }
+
+        const expandAll = (expand) => {
+          const collectPaths = (node, paths = []) => {
+            if (node.path && node.path.length > 0) {
+              paths.push(node.path.join('/'))
+            }
+            if (node.children) {
+              node.children.forEach(child => collectPaths(child, paths))
+            }
+            return paths
+          }
+
+          if (tree.value) {
+            if (expand) {
+              const paths = collectPaths(tree.value)
+              paths.forEach(p => expandedNodes.value.add(p))
+            } else {
+              expandedNodes.value.clear()
+            }
+          }
+        }
+
+        const copyData = async () => {
+          const data = displayData.value
+          if (!data) return
+
+          try {
+            await navigator.clipboard.writeText(JSON.stringify(data, null, 2))
+          } catch (e) {
+            console.error('Failed to copy:', e)
+          }
+        }
+
+        const formatFileSize = (bytes) => {
+          if (bytes < 1024) return bytes + ' B'
+          if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB'
+          return (bytes / (1024 * 1024)).toFixed(1) + ' MB'
+        }
+
+        onMounted(() => {
+          loadSessions()
+        })
+
+        return {
+          sessions,
+          selectedSessionId,
+          tree,
+          filteredTree,
+          selectedNode,
+          selectedPath,
+          displayMode,
+          treeSearch,
+          loadingSession,
+          errorMessage,
+          displayData,
+          canShowTable,
+          stats,
+          expandedNodes,
+          loadSessions,
+          loadSession,
+          selectNode,
+          highlightJson,
+          expandAll,
+          copyData,
+          formatFileSize
+        }
+      }
+    }).mount('#app')
+  </script>
+</body>
+</html>

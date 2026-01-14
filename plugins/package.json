@@ -1,0 +1,26 @@
+{
+  "name": "opencode-llm-interceptor-plugins",
+  "version": "1.0.0",
+  "description": "Plugins for intercepting and logging OpenCode LLM communications",
+  "type": "module",
+  "private": true,
+  "keywords": [
+    "opencode",
+    "llm",
+    "interceptor",
+    "logging",
+    "ai"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@opencode-ai/plugin": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/bun": "latest",
+    "typescript": "^5.3.3"
+  },
+  "peerDependencies": {
+    "bun": ">=1.3.0"
+  }
+}

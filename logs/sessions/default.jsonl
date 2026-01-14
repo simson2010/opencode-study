@@ -1,0 +1,1 @@
+{"timestamp":1768420536494,"type":"command","data":{"hook":"experimental.chat.messages.transform","type":"command","messageCount":1,"command":"hi ","messages":[{"role":"user","parts":[{"type":"text","text":"hi "}]}]}}

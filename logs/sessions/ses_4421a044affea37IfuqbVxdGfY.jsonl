@@ -1,0 +1,1 @@
+{"timestamp":1768420379841,"type":"response","data":{"hook":"experimental.text.complete","type":"response","text":"已修复！现在使用 `Bun.open()` 打开文件并设置 `append: true` 模式，这样每次日志条目都会追加到文件末尾而不是覆盖。\n\n请测试一下，现在应该能正确将每个会话的日志写入独立的 `.jsonl` 文件了。","length":113}}
