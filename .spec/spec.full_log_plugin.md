@@ -42,42 +42,19 @@ This specification documents the design and implementation of two LLM intercepto
 ### Session-Based Data Flow
 
 ```
-Session A (session-abc-123)
-├─ Round 1 (round-1234567890-abc123)
-│  ├─ command: "help"
-│  ├─ response: "Here's how to use..."
-│  ├─ tools: 0
-│  └─ tokens: {input: 150, output: 80}
-├─ Round 2 (round-1234567900-def456)
-│  ├─ command: "write code"
-│  ├─ response: "I'll write the code..."
-│  ├─ tools: 3
-│  └─ tokens: {input: 500, output: 300}
-└─ tokens: {input: 650, output: 380}
+Session (sessionID or auto-generated)
+├─ system_prompt: ["You are a helpful assistant..."]
+├─ user: ["help", "write code"]
+├─ assistant: ["Here's how to use...", "I'll write the code..."]
+├─ tools: [{type: "before", tool: "bash", args: [...], callID: "..."}, {type: "after", tool: "bash", result: {...}, callID: "..."}]
+├─ events: [...]
+├─ tokens: {input: 650, output: 380, total: 1030}
+├─ cost: 0.0025
+├─ startTime: 1234567890
+└─ endTime: 1234568000
    ↓
-./logs/sessions/session-abc-123.jsonl
-├─ {type: "command", roundID: "round-1234567890-abc123", command: "help"}
-├─ {type: "response", roundID: "round-1234567890-abc123", text: "Here's how..."}
-├─ {type: "event", roundID: "round-1234567890-abc123", tokens: {...}}
-├─ {type: "command", roundID: "round-1234567900-def456", command: "write code"}
-├─ {type: "tool", roundID: "round-1234567900-def456", tool: "bash"}
-├─ {type: "tool", roundID: "round-1234567900-def456", tool: "read"}
-├─ {type: "tool", roundID: "round-1234567900-def456", tool: "write"}
-├─ {type: "response", roundID: "round-1234567900-def456", text: "I'll write..."}
-└─ {type: "event", roundID: "round-1234567900-def456", tokens: {...}}
-
-./logs/sessions/rounds/
-├─ round-1234567890-abc123.jsonl
-│  ├─ {type: "command", roundID: "round-1234567890-abc123", command: "help"}
-│  ├─ {type: "response", roundID: "round-1234567890-abc123", text: "Here's how..."}
-│  └─ {type: "event", roundID: "round-1234567890-abc123", tokens: {...}}
-└─ round-1234567900-def456.jsonl
-   ├─ {type: "command", roundID: "round-1234567900-def456", command: "write code"}
-   ├─ {type: "tool", roundID: "round-1234567900-def456", tool: "bash"}
-   ├─ {type: "tool", roundID: "round-1234567900-def456", tool: "read"}
-   ├─ {type: "tool", roundID: "round-1234567900-def456", tool: "write"}
-   ├─ {type: "response", roundID: "round-1234567900-def456", text: "I'll write..."}
-   └─ {type: "event", roundID: "round-1234567900-def456", tokens: {...}}
+./logs/sessions/<sessionID>.jsonl
+   {sessionID: "...", startTime: 1234567890, endTime: 1234568000, data: {system_prompt: [...], user: [...], assistant: [...], tools: [...], events: [...]}, tokens: {...}, cost: ...}
 ```
 
 ### Plugin Interface
@@ -195,13 +172,12 @@ console.log("===================\n")
 - Session tracking via `sessionID`
 - Complete data preservation (no truncation)
 - In-memory log buffer per session
-- Event stream capture
+- Session-type event capture
 - Structured JSONL format with command/response pairing
 - Automatic session directory creation
 
 **Log Location:** 
 - Session files: `./logs/sessions/<sessionID>.jsonl`
-- Round files: `./logs/sessions/rounds/<roundID>.jsonl`
 
 **Directory Structure:**
 ```
@@ -209,21 +185,14 @@ console.log("===================\n")
 └── sessions/
     ├── session-abc123.jsonl
     ├── session-def456.jsonl
-    ├── session-ghi789.jsonl
-    └── rounds/
-        ├── round-1234567890-abc123.jsonl
-        ├── round-1234567900-def456.jsonl
-        └── round-1234567910-ghi789.jsonl
+    └── session-ghi789.jsonl
 ```
 
 **Class: LLMInterceptor**
 
 **Properties:**
-- `sessions: Map<string, SessionData>` - Map of sessionID to session data
+- `currentSession: SessionJSONL | null` - Current active session
 - `baseLogDir: string` - Base directory for session logs
-- `fileHandles: Map<string, number>` - Map of file handles (legacy, no longer used)
-- `currentRoundID: string | null` - Current round ID for logging
-- `roundLogsDir: string` - Directory for round-specific log files
 
 **Methods:**
 
@@ -232,149 +201,93 @@ console.log("===================\n")
 **Default:** `"./logs/sessions"`
 **Operations:**
 - Creates base log directory if it doesn't exist
-- Creates rounds subdirectory if it doesn't exist
-- Initializes empty sessions map
-- Initializes currentRoundID to null
-- No file loading (sessions created on-demand)
 
-#### `private async ensureSessionDir()`
+#### `private ensureSessionDir()`
 **Purpose:** Ensure base session directory exists
 **Operations:**
-- Checks if baseLogDir exists
-- Creates directory with `createPath: true` if missing
-
-#### `private async ensureRoundsDir()`
-**Purpose:** Ensure rounds directory exists
-**Operations:**
-- Checks if roundLogsDir exists
-- Creates directory with `createPath: true` if missing
+- Uses `Bun.mkdir()` with `recursive: true` to create directory
 
 #### `private getLogFile(sessionID: string)`
 **Purpose:** Get the log file path for a specific session
 **Returns:** `<baseLogDir>/<sessionID>.jsonl`
 
-#### `private getRoundLogFile(roundID: string)`
-**Purpose:** Get the log file path for a specific round
-**Returns:** `<baseLogDir>/rounds/<roundID>.jsonl`
+#### `public createSession(sessionID?: string)`
+**Purpose:** Create a new session object
+**Returns:** `SessionJSONL` object with initialized data
 
-#### `private generateRoundID(): string`
-**Purpose:** Generate a unique round identifier
-**Returns:** Unique round ID in format `round-<timestamp>-<random>`
-**Example:** `round-1234567890-abc123def`
-
-#### `private startNewRound(): string`
-**Purpose:** Start a new conversation round
-**Returns:** New round ID
+#### `public ensureCurrentSession(sessionID?: string)`
+**Purpose:** Get or create current session
+**Returns:** `SessionJSONL` object
 **Operations:**
-- Generates new round ID
-- Sets currentRoundID to new round ID
-- Returns the new round ID
+- Creates new session if currentSession is null
+- Updates sessionID if provided
 
-#### `private getCurrentRoundID(): string | null`
-**Purpose:** Get the current round ID
-**Returns:** Current round ID or null if no active round
-
-#### `private endRound()`
-**Purpose:** End the current conversation round
+#### `public async writeSessionJSONL()`
+**Purpose:** Write current session to file and reset
 **Operations:**
-- Sets currentRoundID to null
+- Generates sessionID if not set (format: `ses_<timestamp>`)
+- Updates endTime
+- Writes single JSON line to session file
+- Resets currentSession to a new empty session
 
-#### `private async log(type: string, data: any, sessionID: string)`
-**Purpose:** Write log entry to session-specific and round-specific files
-**Parameters:**
-- `type`: Log type ("command", "response", "tool", "event")
-- `data`: Arbitrary data payload
-- `sessionID`: Session identifier (required)
-
+#### `public extractUserCommand(messages: Message[])`
+**Purpose:** Extract last user message from message array
+**Returns:** Text content of last user message or empty string
 **Operations:**
-- Creates log entry with timestamp
-- Appends to session-specific file (JSONL format)
-- Appends to round-specific file (JSONL format) if there's an active round
-- Updates session metadata in memory
-- Console preview (200 chars)
-- Handles missing session by creating new session
+- Iterates backwards through messages
+- Finds first message with role "user"
+- Extracts text from first text part
 
 **Session Log Entry Format:**
 ```json
 {
-  "timestamp": 1234567890,
-  "type": "command|response|tool|event",
-  "data": { /* hook-specific data */ }
+  "sessionID": "session-abc-123",
+  "startTime": 1234567890,
+  "endTime": 1234568000,
+  "data": {
+    "system_prompt": [["You are a helpful assistant..."]],
+    "user": ["help", "write code"],
+    "assistant": ["Here's how to use...", "I'll write..."],
+    "tools": [{...}, {...}],
+    "events": [...]
+  },
+  "tokens": {
+    "input": 650,
+    "output": 380,
+    "total": 1030
+  },
+  "cost": 0.0025
 }
 ```
-
-**Session Metadata Format (tracked in memory):**
-```typescript
-interface SessionData {
-  sessionID: string
-  startTime: number
-  endTime?: number
-  command?: string
-  response?: string
-  tools: number
-  tokens?: {
-    input: number
-    output: number
-    total: number
-  }
-  cost?: number
-}
-
-interface RoundData {
-  roundID: string
-  sessionID: string
-  startTime: number
-  endTime?: number
-  command?: string
-  response?: string
-  tools: number
-  tokens?: {
-    input: number
-    output: number
-    total: number
-  }
-  cost?: number
-}
-```
-
-#### `public getSession(sessionID: string)`
-**Purpose:** Retrieve session metadata
-**Returns:** `SessionData | undefined`
-
-#### `public listSessions()`
-**Purpose:** List all tracked sessions
-**Returns:** `SessionData[]`
 
 **Implemented Hooks:**
 
 #### Hook: `experimental.chat.system.transform`
-**Captures:**
-- System prompt array
-- Session ID
+**Input:** `input: { sessionID?: string }`, `output: { system: string[] }`
+**Operations:**
+- Ensures current session exists
+- Pushes output.system to session.data.system_prompt
 
-**Log Data Structure:**
+**Data Structure:**
 ```json
 {
-  "hook": "experimental.chat.system.transform",
-  "system": ["system message 1", "system message 2"]
+  "sessionID": "session-abc-123",
+  "data": {
+    "system_prompt": [["You are a helpful assistant..."]]
+  }
 }
 ```
 
-**Note:** This hook runs before a new round starts, so `roundID` is not present.
-
 #### Hook: `chat.params`
-**Captures:**
-- Temperature
-- Top P
-- Top K
-- Options object
-- Model ID
-- Provider ID
+**Input:** `input: { sessionID?: string, model?: { id: string }, provider?: { info: { id: string } } }`, `output: { temperature?: number, topP?: number, topK?: number, options?: any }`
+**Operations:**
+- Ensures current session exists
+- Pushes params to session.data.events
 
-**Log Data Structure:**
+**Event Structure:**
 ```json
 {
-  "hook": "chat.params",
+  "type": "chat.params",
   "temperature": 0.7,
   "topP": 0.9,
   "topK": 40,
@@ -384,22 +297,18 @@ interface RoundData {
 }
 ```
 
-**Note:** This hook runs before a new round starts, so `roundID` is not present.
-
 #### Hook: `experimental.chat.messages.transform`
-**Captures:**
-- Message count
-- Full message array with roles
-- Message parts (text, tool-calls, tool-results)
-- **User command** (extracted from last user message)
-- Timestamps per part
+**Input:** `input: { sessionID?: string }`, `output: { messages: Message[] }`
+**Operations:**
+- Extracts user command from last user message
+- Ensures current session exists
+- Pushes command to session.data.user
+- Pushes event to session.data.events
 
-**Log Data Structure:**
+**Event Structure:**
 ```json
 {
-  "hook": "experimental.chat.messages.transform",
-  "type": "command",
-  "roundID": "round-1234567890-abc123",
+  "type": "experimental.chat.messages.transform",
   "messageCount": 10,
   "command": "User's last message or command",
   "messages": [
@@ -417,76 +326,39 @@ interface RoundData {
 }
 ```
 
-**Session Update:**
-- Extracts last user message as session `command`
-- Logic: Find last message with `role === "user"` and extract `parts[0].text`
-- Initializes session if new (creates `SessionData` with `sessionID`, `startTime`)
-- Sets session `command` field
-- Resets session `tools` counter to 0
-
-**Round Management:**
-- Starts a new conversation round by calling `startNewRound()`
-- Generates unique round ID in format `round-<timestamp>-<random>`
-- Sets `currentRoundID` to the new round ID
-- All subsequent logs in this round will use this round ID
-- Round ends when `experimental.text.complete` hook fires
-
 #### Hook: `experimental.text.complete`
-**Captures:**
-- Complete response text
-- Text length
-- Session ID
-
-**Log Data Structure:**
-```json
-{
-  "hook": "experimental.text.complete",
-  "type": "response",
-  "roundID": "round-1234567890-abc123",
-  "text": "complete response...",
-  "length": 1234
-}
-```
-
-**Session Update:**
-- Stores complete response in session metadata
-- Sets session `endTime`
-
-**Round Management:**
-- Ends the current conversation round by calling `endRound()`
-- Sets `currentRoundID` to null
+**Input:** `input: { sessionID?: string }`, `output: { text: string }`
+**Operations:**
+- Ensures current session exists
+- Pushes output.text to session.data.assistant
 
 #### Hook: `tool.execute.before`
-**Captures:**
-- Tool name
-- Call ID
-- Tool arguments
+**Input:** `input: { sessionID?: string, tool: string, callID: string }`, `output: { args: any }`
+**Operations:**
+- Ensures current session exists
+- Pushes tool data to session.data.tools
 
-**Log Data Structure:**
+**Tool Entry Structure:**
 ```json
 {
-  "hook": "tool.execute.before",
+  "type": "before",
   "tool": "bash",
-  "roundID": "round-1234567890-abc123",
   "args": ["command", "arg1"],
   "callID": "call-uuid"
 }
 ```
 
 #### Hook: `tool.execute.after`
-**Captures:**
-- Tool name
-- Call ID
-- Result title
-- Result output
-- Result metadata
+**Input:** `input: { sessionID?: string, tool: string, callID: string }`, `output: { title?: string, output?: string, metadata?: any }`
+**Operations:**
+- Ensures current session exists
+- Pushes tool result to session.data.tools
 
-**Log Data Structure:**
+**Tool Entry Structure:**
 ```json
 {
-  "hook": "tool.execute.after",
+  "type": "after",
   "tool": "bash",
-  "roundID": "round-1234567890-abc123",
   "result": {
     "title": "Command output",
     "output": "result...",
@@ -497,80 +369,16 @@ interface RoundData {
 ```
 
 #### Hook: `event`
-**Purpose:** Capture real-time streaming events
-**Event Types Handled:**
+**Input:** `{ event: any }`
+**Operations:**
+- Ensures current session exists
+- Pushes only session-type events (where event.type starts with "session") to session.data.events
+- If event.type is "session.idle", calls `writeSessionJSONL()` to persist session
 
-**1. text-delta**
-- Incremental text chunks
-- Message ID
-- Part ID
-- Round ID
-
-```json
-{
-  "type": "text-delta",
-  "roundID": "round-1234567890-abc123",
-  "text": "partial text",
-  "messageID": "msg-uuid",
-  "partID": "part-uuid"
-}
-```
-
-**2. tool-call**
-- Tool name
-- Tool input
-- Message ID
-- Part ID
-- Round ID
-
-```json
-{
-  "type": "tool-call",
-  "roundID": "round-1234567890-abc123",
-  "toolName": "bash",
-  "input": {"command": "ls"},
-  "messageID": "msg-uuid",
-  "partID": "part-uuid"
-}
-```
-
-**3. tool-result**
-- Tool output
-- Message ID
-- Part ID
-- Round ID
-
-```json
-{
-  "type": "tool-result",
-  "roundID": "round-1234567890-abc123",
-  "output": "result...",
-  "messageID": "msg-uuid",
-  "partID": "part-uuid"
-}
-```
-
-**4. step-finish**
-- Token usage (input/output/total)
-- Cost information
-- Finish reason
-- Message ID
-- Round ID
-
-```json
-{
-  "type": "step-finish",
-  "roundID": "round-1234567890-abc123",
-  "tokens": {
-    "input": 100,
-    "output": 50,
-    "total": 150
-  },
-  "cost": 0.001,
-  "finish": "stop",
-  "messageID": "msg-uuid"
-}
-```
+**Event Structure:**
+Only session-type events are logged to session.data.events array
+- Events where event.type starts with "session"
+- `session.idle`: Triggers session write to file
 
 ## Data Flow
 
@@ -581,181 +389,50 @@ User Input
     ↓
 OpenCode Chat API
     ↓
-experimental.chat.system.transform (log system prompt to session file)
+experimental.chat.system.transform (push to session.data.system_prompt)
     ↓
-chat.params (log parameters to session file)
+chat.params (push to session.data.events)
     ↓
-experimental.chat.messages.transform (log messages to both session and round files)
-    ├─ Start new round (generate round ID)
-    └─ Write to both files
+experimental.chat.messages.transform (extract user command, push to session.data.user and session.data.events)
     ↓
 Send to LLM Provider
     ↓
 Receive Stream
-    ↓
-event: text-delta (log incremental text to both session and round files)
-event: tool-call (log tool invocation to both session and round files)
-event: tool-result (log tool output to both session and round files)
-    ↓
-experimental.text.complete (log complete response to both session and round files)
-    ├─ End round
-    └─ Write to both files
-    ↓
-tool.execute.before (log tool execution start to both session and round files)
-    ↓
+     ↓
+tool.execute.before (push to session.data.tools)
+     ↓
 Execute Tool
+     ↓
+tool.execute.after (push to session.data.tools)
+     ↓
+experimental.text.complete (push output.text to session.data.assistant)
+     ↓
+event: session.idle (trigger writeSessionJSONL())
     ↓
-tool.execute.after (log tool execution result to both session and round files)
-event: step-finish (log completion stats to both session and round files)
-```
-
-### Log Persistence Flow
-
-```
-Hook Trigger (with sessionID)
+Write session to ./logs/sessions/<sessionID>.jsonl
     ↓
-LLMInterceptor.log(type, data, sessionID)
-    ↓
-Check if session exists in memory
-    ├─ If no: Create new SessionData
-    │         ├─ sessionID: provided
-    │         ├─ startTime: Date.now()
-    │         └─ Initialize empty fields
-    └─ If yes: Update existing SessionData
-          └─ (command, response, tokens, cost, etc.)
-    ↓
-Create Log Entry
-    ├─ timestamp: Date.now()
-    ├─ type: command/response/tool/event
-    ├─ roundID: getCurrentRoundID() (if active round)
-    └─ data: payload
-    ↓
-Determine Session Log File
-    └─ <baseLogDir>/<sessionID>.jsonl
-    ↓
-Append Entry to Session File (JSONL format)
-    └─ Single JSON object per line
-    └─ Preserves entire session history
-    ↓
-Check if Active Round Exists
-    └─ If yes: Determine Round Log File
-         └─ <baseLogDir>/rounds/<roundID>.jsonl
-         ↓
-         Append Entry to Round File (JSONL format)
-         └─ Single JSON object per line
-         └─ Preserves entire round history
-    ↓
-Update In-Memory Session Metadata
-    ↓
-Console Preview (200 chars)
-```
-
-### Session File Organization
-
-```
-./logs/sessions/
-│
-├── session-abc-123-def.jsonl
-│   ├── [timestamp, type: "command", data: { roundID: "round-1234567890-abc123", command: "help" }]
-│   ├── [timestamp, type: "response", data: { roundID: "round-1234567890-abc123", text: "..." }]
-│   ├── [timestamp, type: "tool", data: { roundID: "round-1234567890-abc123", hook: "tool.execute.before", ... }]
-│   ├── [timestamp, type: "event", data: { roundID: "round-1234567890-abc123", type: "step-finish", ... }]
-│   ├── [timestamp, type: "command", data: { roundID: "round-1234567900-def456", command: "write code" }]
-│   ├── [timestamp, type: "tool", data: { roundID: "round-1234567900-def456", hook: "tool.execute.before", ... }]
-│   ├── [timestamp, type: "response", data: { roundID: "round-1234567900-def456", text: "..." }]
-│   └── [timestamp, type: "event", data: { roundID: "round-1234567900-def456", type: "step-finish", ... }]
-│
-└── rounds/
-    ├── round-1234567890-abc123.jsonl
-    │   ├── [timestamp, type: "command", data: { roundID: "round-1234567890-abc123", command: "help" }]
-    │   ├── [timestamp, type: "response", data: { roundID: "round-1234567890-abc123", text: "..." }]
-    │   ├── [timestamp, type: "tool", data: { roundID: "round-1234567890-abc123", hook: "tool.execute.before", ... }]
-    │   └── [timestamp, type: "event", data: { roundID: "round-1234567890-abc123", type: "step-finish", ... }]
-    │
-    └── round-1234567900-def456.jsonl
-        ├── [timestamp, type: "command", data: { roundID: "round-1234567900-def456", command: "write code" }]
-        ├── [timestamp, type: "tool", data: { roundID: "round-1234567900-def456", hook: "tool.execute.before", ... }]
-        ├── [timestamp, type: "response", data: { roundID: "round-1234567900-def456", text: "..." }]
-        └── [timestamp, type: "event", data: { roundID: "round-1234567900-def456", type: "step-finish", ... }]
-```
-
-### Session Lifecycle
-
-```
-User sends message
-    ↓
-experimental.chat.messages.transform (hook)
-    ├─ Extract user command
-    ├─ Create new session if sessionID not in memory
-    ├─ Start new conversation round
-    │  ├─ Generate unique round ID
-    │  └─ Set currentRoundID
-    └─ Log to both session file and round file:
-       ├─ Session file: { type: "command", roundID: "...", command: "user input" }
-       └─ Round file: { type: "command", roundID: "...", command: "user input" }
-    ↓
-LLM processes and responds
-    ↓
-event: text-delta (hook)
-    └─ Log to both files: { type: "event", roundID: "...", type: "text-delta", ... }
-    ↓
-event: tool-call (hook)
-    └─ Log to both files: { type: "event", roundID: "...", type: "tool-call", ... }
-    ↓
-tool.execute.before (hook)
-    └─ Log to both files: { type: "tool", roundID: "...", tool: "...", ... }
-    ↓
-Execute Tool
-    ↓
-tool.execute.after (hook)
-    └─ Log to both files: { type: "tool", roundID: "...", tool: "...", ... }
-    ↓
-experimental.text.complete (hook)
-    ├─ Store complete response
-    ├─ End conversation round
-    └─ Log to both files:
-       ├─ Session file: { type: "response", roundID: "...", text: "..." }
-       └─ Round file: { type: "response", roundID: "...", text: "..." }
-    ↓
-event: step-finish (hook)
-    ├─ Update session metadata (tokens, cost)
-    └─ Log to both files:
-       ├─ Session file: { type: "event", roundID: "...", tokens: {...}, cost: 0.01 }
-       └─ Round file: { type: "event", roundID: "...", tokens: {...}, cost: 0.01 }
-    ↓
-Round complete
-    └─ Round file contains complete conversation for this round
-User sends another message
-    ↓
-Start new round with new round ID
-    └─ Repeat cycle
-    ↓
-Session complete
-    ├─ Set session.endTime
-    ├─ Session file contains full conversation history (multiple rounds)
-    └─ Multiple round files exist, one per conversation turn
+Reset currentSession to empty session
 ```
 
 ## Plugin Comparison
 
 | Feature | SimpleLLMInterceptor | FullLLMInterceptor |
 |---------|---------------------|-------------------|
-| **Output** | Console + Truncated File | Console + Full File |
-| **Persistence** | JSONL (single file) | JSONL (per session + per round) |
-| **Log Location** | `/tmp/opencode-logs/intercepted-prompts.jsonl` | `./logs/sessions/<sessionID>.jsonl` + `./logs/sessions/rounds/<roundID>.jsonl` |
-| **File Organization** | Single file | Session-based + Round-based (one file per session, one file per round) |
+| **Output** | Console + Truncated File | File only |
+| **Persistence** | JSONL (single file) | JSONL (per session) |
+| **Log Location** | `/tmp/opencode-logs/intercepted-prompts.jsonl` | `./logs/sessions/<sessionID>.jsonl` |
+| **File Organization** | Single file | Session-based (one file per session) |
 | **Session Tracking** | ❌ No | ✅ Yes (sessionID + metadata) |
-| **Round Tracking** | ❌ No | ✅ Yes (roundID + per-round files) |
-| **Command/Response Pairing** | ❌ No | ✅ Yes (extracted and stored) |
-| **Event Stream** | ❌ No | ✅ Yes (text-delta, tool-call, etc.) |
+| **Round Tracking** | ❌ No | ❌ No |
+| **Command/Response Pairing** | ❌ No | ✅ Yes (system_prompt, user, assistant arrays) |
+| **Event Stream** | ❌ No | ✅ Yes (session-type events only) |
 | **Chat Params** | ❌ No | ✅ Yes (temperature, model, etc.) |
 | **Data Truncation** | ✅ Yes (500/200 chars) | ❌ No (full data) |
 | **In-Memory Buffer** | ❌ No | ✅ Yes (per session) |
 | **Log Rotation** | ❌ No | ❌ No (manual cleanup) |
 | **Async Write** | ✅ Yes | ✅ Yes |
-| **I/O Overhead** | Low | Low (append-only per session and round) |
-| **Session Query** | ❌ No | ✅ Yes (getSession, listSessions) |
-| **Round Isolation** | ❌ No | ✅ Yes (complete turn in single file) |
+| **I/O Overhead** | Low | Low (append-only per session) |
+| **Auto-Write Trigger** | Immediate on hook | On session.idle event |
 
 ## Integration
 
@@ -824,49 +501,30 @@ python -m http.server 8000
 
 ## Interface Definitions
 
-### SessionData
+### TurnData
 ```typescript
-interface SessionData {
+interface TurnData {
+  system_prompt: string[][]
+  user: string[]
+  assistant: string[]
+  tools: any[]
+  events: any[]
+}
+```
+
+### SessionJSONL
+```typescript
+interface SessionJSONL {
   sessionID: string
   startTime: number
-  endTime?: number
-  command?: string
-  response?: string
-  tools: number
+  endTime: number
+  data: TurnData
   tokens?: {
     input: number
     output: number
     total: number
   }
   cost?: number
-}
-```
-
-### RoundData
-```typescript
-interface RoundData {
-  roundID: string
-  sessionID: string
-  startTime: number
-  endTime?: number
-  command?: string
-  response?: string
-  tools: number
-  tokens?: {
-    input: number
-    output: number
-    total: number
-  }
-  cost?: number
-}
-```
-
-### SessionLogEntry
-```typescript
-interface SessionLogEntry {
-  timestamp: number
-  type: "command" | "response" | "tool" | "event"
-  data: any
 }
 ```
 
@@ -931,49 +589,23 @@ interface StepFinishEvent {
 - **Latency:** Negligible
 - **Use Case:** Development, debugging
 
-### FullLLMInterceptor (Session-Based with Round Support)
-- **I/O:** Low (append-only writes to session-specific and round-specific files)
-- **Memory:** Low-Medium (session metadata only, not full logs)
+### FullLLMInterceptor (Session-Based)
+- **I/O:** Low (append-only writes to session-specific files)
+- **Memory:** Low-Medium (session data in RAM until write)
 - **Latency:** Negligible (no buffer rewriting)
-- **Use Case:** Production monitoring, analysis, conversation history, turn-by-turn debugging
+- **Use Case:** Production monitoring, analysis, conversation history
 
 **Session-Based Benefits:**
 1. **Isolation:** Each conversation is independent file
 2. **Query Performance:** Fast lookups by sessionID
 3. **Scalability:** Logs don't grow indefinitely per session
-4. **Memory Efficiency:** Only metadata in RAM, full logs on disk
+4. **Memory Efficiency:** Only current session in RAM, written to disk on idle
 5. **Concurrent Access:** Multiple sessions can be logged simultaneously
 6. **Easy Cleanup:** Delete or archive individual sessions
 7. **Natural Organization:** Files map 1:1 to conversations
 8. **Simpler Analysis:** Process individual sessions independently
 9. **Better Debugging:** Isolate problematic conversations
 10. **Export Ready:** Each session file is self-contained
-
-**Round-Based Benefits:**
-11. **Turn Isolation:** Each conversation turn is independent file
-12. **Turn-Level Debugging:** Isolate specific rounds for debugging
-13. **Simpler Analysis:** Each round is a self-contained unit
-14. **Natural Unit:** Rounds map 1:1 to LLM requests/responses
-15. **Easy Sharing:** Share specific turns without sharing entire session
-16. **Turn Statistics:** Calculate metrics per turn
-17. **Granular Querying:** Analyze individual turns independently
-18. **Turn Comparison:** Compare different turns easily
-19. **Turn Reordering:** Process turns independently
-20. **Turn Archive:** Archive important turns separately
-
-**Comparison with Single-File Approach:**
-
-| Aspect | Single-File | Session-Based | Session + Round |
-|--------|-------------|---------------|-----------------|
-| File Growth | Unbounded (all sessions) | Bounded (one session) | Bounded (one session + one round) |
-| Memory Usage | High (all logs in RAM) | Low (metadata only) | Low (metadata only) |
-| Query Speed | O(n) scan entire file | O(1) direct file access | O(1) direct file access |
-| Cleanup | Complex (filter + rewrite) | Simple (delete file) | Simple (delete session + rounds) |
-| Concurrency | Write lock contention | No contention (different files) | No contention (different files) |
-| Export | Filter + extract | Direct copy | Direct copy |
-| Debugging | Search mixed logs | Inspect isolated session | Inspect isolated round |
-| Backup | All-or-nothing | Per-session | Per-session + per-round |
-| Turn Isolation | No | No (mixed in session) | Yes (separate file) |
 
 **Optimization Opportunities:**
 1. Add log rotation for session files (max size/time)
@@ -983,11 +615,6 @@ interface StepFinishEvent {
 5. Add configurable sampling rate per session
 6. Selective hook activation
 7. Batch writes within session
-8. Add round log rotation (max size/time per round)
-9. Implement round cleanup (auto-delete old rounds)
-10. Add compression for archived rounds
-11. Implement round indexing for fast queries
-12. Add round aggregation (summarize rounds in session)
 
 ## Dependencies
 
@@ -1006,74 +633,41 @@ interface StepFinishEvent {
 | `experimental.chat.system.transform` | System prompt capture | ✅ | ✅ |
 | `chat.params` | Chat parameters | ❌ | ✅ |
 | `experimental.chat.messages.transform` | Message history + command extraction | ✅ | ✅ |
-| `experimental.text.complete` | Response capture + storage | ✅ | ✅ |
+| `experimental.text.complete` | Response capture | ✅ | ✅ |
 | `tool.execute.before` | Tool execution start | ✅ | ✅ |
 | `tool.execute.after` | Tool execution result | ✅ | ✅ |
 | `event` | Stream events | ❌ | ✅ |
 
 **Session-Specific Behavior:**
-- `experimental.chat.messages.transform`: Extracts user command, creates/updates session, starts new conversation round
-- `experimental.text.complete`: Stores response, updates session metadata, ends current conversation round
-- `event: step-finish`: Updates session tokens and cost
-- All hooks write to both session-specific file and round-specific file
-- Round IDs are generated on each new user command
-- Round files contain complete logs for a single conversation turn
-- Session files contain complete logs for all rounds in a session
+- `experimental.chat.system.transform`: Pushes system prompt to session.data.system_prompt array
+- `experimental.chat.messages.transform`: Extracts user command, pushes to session.data.user array
+- `experimental.text.complete`: Pushes assistant response to session.data.assistant array
+- `tool.execute.before` and `tool.execute.after`: Push tool execution data to session.data.tools array
+- `event`: Pushes session-type events (where event.type starts with "session") to session.data.events array
+- `event: session.idle`: Triggers `writeSessionJSONL()` to persist session to disk
 
 ## Event Types Captured
 
 | Event Type | Description | Captured By |
 |------------|-------------|-------------|
-| `text-delta` | Incremental text chunks | Full |
-| `tool-call` | Tool invocation | Full |
-| `tool-result` | Tool output | Full |
-| `step-finish` | Completion metadata | Full |
+| `session.*` | Session-related events (e.g., session.idle) | Full |
 
-## Round-Based Logging
+## LLM Data Capture Logic
 
-**Overview:**
-Each conversation turn (round) is logged to its own JSONL file in addition to being logged to the session file. This allows for:
-- Isolated analysis of individual conversation turns
-- Easier debugging of specific rounds
-- Per-round statistics and metrics
-- More granular file organization
+### System Prompt Capture
 
-**Round Lifecycle:**
-1. Round starts when `experimental.chat.messages.transform` hook fires
-2. Unique round ID is generated: `round-<timestamp>-<random>`
-3. Current round ID is set in the interceptor
-4. All subsequent logs are written to both session file and round file
-5. Round ends when `experimental.text.complete` hook fires
-6. Current round ID is reset to null
-7. Next conversation turn starts a new round with a new ID
+**Source:** `experimental.chat.system.transform` hook
 
-**Round File Structure:**
-```
-./logs/sessions/rounds/
-├── round-1234567890-abc123.jsonl
-│   ├── {timestamp, type: "command", data: {roundID: "...", command: "..."}}
-│   ├── {timestamp, type: "tool", data: {roundID: "...", tool: "...", ...}}
-│   ├── {timestamp, type: "response", data: {roundID: "...", text: "..."}}
-│   └── {timestamp, type: "event", data: {roundID: "...", tokens: {...}, ...}}
-└── round-1234567900-def456.jsonl
-    └── (similar structure for next round)
+**Capture Logic:**
+```typescript
+function captureSystemPrompt(output: { system: string[] }): string[] {
+  return output.system // Complete system prompt array
+}
 ```
 
-**Round File Benefits:**
-1. Complete conversation turn in single file
-2. Easy to analyze individual LLM requests/responses
-3. Independent of session complexity
-4. Can be shared or analyzed in isolation
-5. Natural unit for conversation analysis
-6. Simplifies per-turn statistics
-
-**Round Management Methods:**
-- `generateRoundID()`: Generates unique round ID
-- `startNewRound()`: Starts a new round and returns round ID
-- `getCurrentRoundID()`: Returns current round ID or null
-- `endRound()`: Ends current round (sets to null)
-
-## Command/Response Extraction Logic
+**Session Update:**
+- Pushes system prompt to session.data.system_prompt array as a new inner array
+- Multiple system pushes create nested array structure
 
 ### User Command Extraction
 
@@ -1099,6 +693,10 @@ function extractUserCommand(messages: Message[]): string {
 - Input: "Write a function to sort array" → Command: "Write a function to sort array"
 - Input: Multi-part message with tool calls → Extracts only text part
 
+**Session Update:**
+- Pushes user command to session.data.user array
+- User command extracted from last user message in the message array
+
 ### LLM Response Capture
 
 **Source:** `experimental.text.complete` hook
@@ -1111,84 +709,46 @@ function captureResponse(output: { text: string }): string {
 ```
 
 **Session Update:**
-- Stores full response in session `response` field
-- Sets session `endTime` timestamp
-- Response remains stored in memory (metadata)
-- Full response also written to session file
+- Pushes full response to session.data.assistant array
 
-### Session Metadata Aggregation
+### Session Metadata
 
 **Token Usage:**
-- Captured from `event: step-finish`
-- Aggregated per session
+- Stored directly on SessionJSONL object
 - Structure: `{ input, output, total }`
 
 **Cost Tracking:**
-- Captured from `event: step-finish`
-- Summed per session
+- Stored directly on SessionJSONL object
 - Format: Number (dollars)
 
-**Tool Count:**
-- Incremented on each `tool.execute.before` hook
-- Stored in session `tools` field
-- Reset on new command
+**Tools:**
+- Array of tool execution objects stored in session.data.tools
+- Each entry includes: type ("before"/"after"), tool, args/result, callID
 
 **Session Duration:**
-- `startTime`: Set on first command
-- `endTime`: Set on response complete
-- `duration = endTime - startTime` (milliseconds)
-
-### List All Sessions
-
-```typescript
-const sessions = interceptor.listSessions()
-sessions.forEach(session => {
-  console.log(`Session: ${session.sessionID}`)
-  console.log(`  Command: ${session.command}`)
-  console.log(`  Tools: ${session.tools}`)
-  console.log(`  Tokens: ${session.tokens?.total}`)
-  console.log(`  Cost: $${session.cost?.toFixed(4)}`)
-  console.log(`  Duration: ${session.endTime - session.startTime}ms`)
-})
-```
-
-### Get Specific Session
-
-```typescript
-const session = interceptor.getSession("session-abc-123")
-if (session) {
-  console.log("Full conversation:")
-  console.log(`User: ${session.command}`)
-  console.log(`Assistant: ${session.response}`)
-}
-```
+- `startTime`: Set when session is created
+- `endTime`: Set when session is written (on session.idle event)
 
 ### Read Session File
 
 ```bash
-# View all commands in a session
-cat ./logs/sessions/session-abc-123.jsonl | jq 'select(.type == "command")'
-
-# View all responses
-cat ./logs/sessions/session-abc-123.jsonl | jq 'select(.type == "response")'
-
-# View full conversation
+# View entire session JSON
 cat ./logs/sessions/session-abc-123.jsonl | jq
 
-# Count messages per type
-cat ./logs/sessions/session-abc-123.jsonl | jq -r '.type' | sort | uniq -c
+# Extract session metadata
+cat ./logs/sessions/session-abc-123.jsonl | jq '{sessionID, startTime, endTime, tokens, cost}'
 
-# List all round files for a session
-ls ./logs/sessions/rounds/ | grep $(cat ./logs/sessions/session-abc-123.jsonl | jq -r '.data.roundID' | sort -u | head -1 | cut -d- -f2)
+# Extract all user messages
+cat ./logs/sessions/session-abc-123.jsonl | jq '.data.user[]'
 
-# View a specific round
-cat ./logs/sessions/rounds/round-1234567890-abc123.jsonl | jq
+# Extract all assistant responses
+cat ./logs/sessions/session-abc-123.jsonl | jq '.data.assistant[]'
 
-# View all rounds for a session
-for roundID in $(cat ./logs/sessions/session-abc-123.jsonl | jq -r '.data.roundID' | sort -u); do
-  echo "=== Round: $roundID ==="
-  cat "./logs/sessions/rounds/${roundID}.jsonl" | jq
-done
+# View all tool executions
+cat ./logs/sessions/session-abc-123.jsonl | jq '.data.tools[]'
+
+# View all events
+cat ./logs/sessions/session-abc-123.jsonl | jq '.data.events[]'
 ```
 
 ### Session Analysis
@@ -1197,39 +757,28 @@ done
 # List all session files
 ls -lh ./logs/sessions/
 
-# Find sessions with specific command
+# Find sessions with specific user command
 grep -l "write code" ./logs/sessions/*.jsonl
 
 # Calculate total tokens across all sessions
-cat ./logs/sessions/*.jsonl | jq 'select(.data.tokens) | .data.tokens.total' | awk '{sum+=$1} END {print sum}'
+cat ./logs/sessions/*.jsonl | jq -r '.tokens.total' | awk '{sum+=$1} END {print sum}'
 
 # Find expensive sessions
 for file in ./logs/sessions/*.jsonl; do
-  cost=$(cat "$file" | jq 'select(.data.cost) | .data.cost' | awk '{sum+=$1} END {print sum}')
+  cost=$(cat "$file" | jq '.cost')
   echo "$(basename $file .jsonl): $cost"
 done
 
-# List all round files
-ls -lh ./logs/sessions/rounds/
-
-# Count rounds per session
-for session in ./logs/sessions/*.jsonl; do
-  if [[ "$session" != */rounds/* ]]; then
-    rounds=$(cat "$session" | jq -r '.data.roundID' | sort -u | wc -l)
-    echo "$(basename $session .jsonl): $rounds rounds"
-  fi
+# Count messages per session
+for file in ./logs/sessions/*.jsonl; do
+  user_count=$(cat "$file" | jq '.data.user | length')
+  assistant_count=$(cat "$file" | jq '.data.assistant | length')
+  tool_count=$(cat "$file" | jq '.data.tools | length')
+  echo "$(basename $file .jsonl): $user_count user, $assistant_count assistant, $tool_count tools"
 done
 
-# Analyze round statistics
-cat ./logs/sessions/rounds/*.jsonl | jq -r '.type' | sort | uniq -c
-
-# Find rounds with tool usage
-for round in ./logs/sessions/rounds/*.jsonl; do
-  tools=$(cat "$round" | jq 'select(.type == "tool") | .data.tool' | wc -l)
-  if [ "$tools" -gt 0 ]; then
-    echo "$(basename $round .jsonl): $tools tools"
-  fi
-done
+# Extract system prompts from all sessions
+cat ./logs/sessions/*.jsonl | jq -r '.data.system_prompt[][]'
 ```
 
 ## File Structure
@@ -1237,7 +786,7 @@ done
 ```
 plugins/
 ├── simple-llm-interceptor.ts       # Simple terminal logger
-├── full-llm-interceptor.ts         # Full file-based logger (with round support)
+├── full-llm-interceptor.ts         # Full file-based logger
 ├── log-viewer.html                 # Visualization tool
 ├── install.sh                      # Installation script
 ├── package.json                    # Dependencies
@@ -1246,74 +795,44 @@ plugins/
 ├── HOW_TO_USE.md                   # Usage guide
 └── opencode.json.example           # Configuration example
 
-logs/sessions/                       # Session and round log files
-├── session-abc123.jsonl            # Full session logs (all rounds)
-├── session-def456.jsonl            # Full session logs (all rounds)
-└── rounds/                         # Per-round log files
-    ├── round-1234567890-abc123.jsonl
-    ├── round-1234567900-def456.jsonl
-    └── ...
+logs/sessions/                       # Session log files
+├── session-abc123.jsonl            # Full session logs
+├── session-def456.jsonl            # Full session logs
+└── session-ghi789.jsonl            # Full session logs
 ```
 
 ## Version History
 
-**v2.1.0** (Current - Round-Based Logging)
-**New Features:**
-- ✅ Round-based file organization (one file per conversation turn)
-- ✅ Automatic round ID generation on each user command
-- ✅ Dual logging: both session file and round file
-- ✅ Round lifecycle management (start/end)
-- ✅ Round-specific analysis and debugging
-- ✅ Per-round statistics and metrics
-
-**Data Changes:**
-- Added `roundID` field to all log entries
-- New directory structure: `./logs/sessions/rounds/`
-- Round files contain complete conversation turn data
-- Session files contain all rounds with roundID references
-
-**API Changes:**
-- New methods: `generateRoundID()`, `startNewRound()`, `getCurrentRoundID()`, `endRound()`
-- Updated `log()` method to write to both session and round files
-- New properties: `currentRoundID`, `roundLogsDir`
-
-**Benefits:**
-- Complete conversation turn isolation in single file
-- Easier debugging of specific rounds
-- Independent analysis per conversation turn
-- Natural unit for conversation analysis
-
-**v2.0.0** (Session-Based Architecture)
-**Breaking Changes:**
-- Log file structure changed from single file to per-session files
-- `InterceptionLog` interface simplified (sessionID moved to filename)
-- New `SessionData` interface for session metadata
-- Log entry type changed: "request/response" → "command/response"
-
+**v1.0.0** (Current - Basic Session-Based Logging)
 **New Features:**
 - ✅ Session-based file organization (one file per sessionID)
 - ✅ Command/response pairing and extraction
 - ✅ Session metadata tracking (tokens, cost, duration)
-- ✅ Session query API (getSession, listSessions)
-- ✅ Append-only logging (no buffer rewrite)
-- ✅ Reduced memory footprint (metadata only in RAM)
-- ✅ Isolated conversation logs per session
-- ✅ Improved scalability and concurrent access
+- ✅ In-memory session buffering
+- ✅ Append-only JSONL logging
+- ✅ Event stream capture (session-type events only, e.g., session.idle)
+- ✅ Tool execution logging (before/after)
+- ✅ Chat parameters logging
+- ✅ System prompt capture
+- ✅ Auto-write on session.idle event
 
-**Performance Improvements:**
-- I/O overhead reduced from O(n) to O(1) per write
-- Memory usage reduced by ~90% (metadata only)
-- Concurrent session support with no locks
-- Faster query performance (direct file access)
+**Data Structure:**
+- SessionJSONL contains:
+  - sessionID, startTime, endTime
+  - data: { system_prompt[][], user[], assistant[], tools[], events[] }
+  - tokens: { input, output, total }
+  - cost: number
 
-**v1.0.0** (Previous)
-- Initial release
-- Single file logging (all sessions mixed)
-- In-memory buffer with full log rewrite on each entry
-- Two plugin variants
-- Event stream support
-- Visualization tool
-- Installation automation
+**Hook Behavior:**
+- All hooks accumulate data in session object
+- Session written on session.idle event
+- Session resets to empty state after write
+
+**Benefits:**
+- Complete conversation history in single file per session
+- All LLM interactions preserved without truncation
+- Structured data format for analysis
+- Easy session isolation and sharing
 
 ## License
 

@@ -619,7 +619,7 @@
 
         const loadSessions = async () => {
           try {
-            const basePath = 'logs/sessions/rounds/'
+            const basePath = 'logs/sessions/'
             const response = await fetch(basePath)
             if (!response.ok) throw new Error('Failed to list sessions')
 

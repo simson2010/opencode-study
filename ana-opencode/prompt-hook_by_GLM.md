@@ -338,8 +338,8 @@ export const LLMInterceptorPlugin: Plugin = async (ctx) => {
     // 订阅所有事件（用于实时追踪）
     event: async ({ event }) => {
       // 可以通过 event.type 过滤感兴趣的事件
-      if (event.payload.type === "text-delta") {
-        console.log("[LLM-HOOK] 文本增量:", event.payload.text)
+      if (event.type === "session.idle") {
+        console.log("[LLM-HOOK] 会话空闲:", event.properties.sessionID)
       }
     },
   }
@@ -365,10 +365,10 @@ export const LLMInterceptorPlugin: Plugin = async (ctx) => {
 - 聊天参数（temperature, topP, topK）
 - 所有消息（用户、助手、工具）
 - 工具调用和结果
-- 流式文本增量
+- 流式文本增量（通过 Monkey Patch AI SDK）
 - 最终文本输出
 - 使用情况/成本信息
-- 所有系统事件
+- 系统事件（如 session.idle, message.updated 等）
 
 ### 方案 2：自定义 Provider（用于请求级拦截）
 
@@ -461,12 +461,12 @@ export function streamText(...args: any[]) {
   
   const result = originalStreamText(config, ...rest)
   
-  // 拦截流
+  // 拦截流（这是 AI SDK 的流类型，不是 OpenCode 事件）
   const fullStream = result.fullStream
   result.fullStream = (async function* () {
     for await (const chunk of fullStream) {
       console.log("[LLM-HOOK] 流块:", chunk.type)
-      
+
       if (chunk.type === "text-delta") {
         console.log("[LLM-HOOK] 文本增量:", chunk.textDelta)
       } else if (chunk.type === "tool-call") {
@@ -476,7 +476,7 @@ export function streamText(...args: any[]) {
       } else if (chunk.type === "finish") {
         console.log("[LLM-HOOK] 完成:", chunk.usage, chunk.finishReason)
       }
-      
+
       yield chunk
     }
   })()
@@ -496,6 +496,34 @@ globalThis.streamText = streamText
 - 侵入性强（需要加载顺序控制）
 - 可能与其他插件冲突
 - 不推荐用于生产环境
+
+### OpenCode 事件类型说明
+
+通过插件系统的 `event` hook 可以订阅以下系统事件：
+
+| 事件类型 | 说明 | 属性 |
+|---------|------|-----|
+| `session.created` | 会话创建 | `info` |
+| `session.updated` | 会话更新 | `info` |
+| `session.deleted` | 会话删除 | `info` |
+| `session.status` | 会话状态变化 | `sessionID`, `status` |
+| `session.idle` | 会话空闲（已弃用） | `sessionID` |
+| `session.error` | 会话错误 | `sessionID`, `error` |
+| `session.compacted` | 会话压缩 | `sessionID` |
+| `message.updated` | 消息更新 | `info` |
+| `message.removed` | 消息删除 | `sessionID`, `messageID` |
+| `message.part.updated` | 消息部分更新 | `part`, `delta` |
+| `message.part.removed` | 消息部分删除 | `sessionID`, `messageID`, `partID` |
+| `permission.asked` | 权限请求 | 请求详情 |
+| `permission.replied` | 权限回复 | 回复详情 |
+| `file.edited` | 文件编辑 | 文件详情 |
+| `tool.execute.before` | 工具执行前 | 在独立的 hook 中处理 |
+| `tool.execute.after` | 工具执行后 | 在独立的 hook 中处理 |
+
+**注意：**
+- `text-delta`、`tool-call`、`tool-result`、`step-finish` 等 **不是 OpenCode 事件**，这些是 AI SDK (`ai` 包) 的流类型，只能通过 Monkey Patch `streamText` 来捕获
+- OpenCode 事件结构为 `{ type: string, properties: any }`
+- 订阅事件的 hook 签名为：`event?: (input: { event: Event }) => Promise<void>`
 
 ---
 
@@ -627,37 +655,18 @@ export const FullLLMInterceptorPlugin: Plugin = async (ctx) => {
     
     // 事件订阅（实时追踪）
     event: async ({ event }) => {
-      const payload = event.payload
-      
-      if (payload.type === "text-delta") {
+      const payload = event.properties
+
+      // 可以通过 event.type 过滤感兴趣的事件
+      if (event.type === "message.updated") {
         await interceptor.log("event", {
-          type: "text-delta",
-          text: payload.text,
-          messageID: payload.messageID,
-          partID: payload.partID,
+          type: "message.updated",
+          info: payload.info,
         })
-      } else if (payload.type === "tool-call") {
+      } else if (event.type === "session.idle") {
         await interceptor.log("event", {
-          type: "tool-call",
-          toolName: payload.toolName,
-          input: payload.input,
-          messageID: payload.messageID,
-          partID: payload.partID,
-        })
-      } else if (payload.type === "tool-result") {
-        await interceptor.log("event", {
-          type: "tool-result",
-          output: payload.output,
-          messageID: payload.messageID,
-          partID: payload.partID,
-        })
-      } else if (payload.type === "step-finish") {
-        await interceptor.log("event", {
-          type: "step-finish",
-          tokens: payload.tokens,
-          cost: payload.cost,
-          finish: payload.finish,
-          messageID: payload.messageID,
+          type: "session.idle",
+          sessionID: payload.sessionID,
         })
       }
     },
@@ -828,10 +837,10 @@ class LLMInterceptorPlugin {
 - ✅ 聊天参数（temperature, topP, topK）
 - ✅ 所有消息（用户、助手、工具）
 - ✅ 工具调用和结果
-- ✅ 流式文本增量
+- ✅ 流式文本增量（通过 Monkey Patch AI SDK）
 - ✅ 最终文本输出
 - ✅ 使用情况/成本信息
-- ✅ 所有系统事件
+- ✅ 系统事件（如 session.idle, message.updated 等）
 
 ---
 
@@ -842,7 +851,7 @@ OpenCode 提供了一个设计良好的插件系统，提供了多个非侵入�
 1. **`experimental.chat.messages.transform`** - 拦截发送给 LLM 的完整 prompt
 2. **`experimental.text.complete`** - 拦截 LLM 的最终文本响应
 3. **`tool.execute.before` / `tool.execute.after`** - 拦截工具调用
-4. **`event`** - 通过事件总线拦截流式事件
+4. **`event`** - 通过事件总线拦截系统事件
 
 这种方法无需修改源代码，可配置，可热加载，并与未来的更新兼容。
 
