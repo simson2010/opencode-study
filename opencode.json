@@ -2,5 +2,15 @@
   "plugin": [
     "./plugins/full-llm-interceptor.ts"
   ],
-  "$schema": "https://opencode.ai/config.json"
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "context7": {
+      "type": "remote",
+      "url": "https://mcp.context7.ai/sse",
+      "enabled": true,
+      "headers": {
+        "Authorization": "Bearer ctx7sk-277651e6-137b-4f9e-a397-f34544f59c1b"
+      }
+    }
+  }
 }
