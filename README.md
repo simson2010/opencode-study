@@ -30,3 +30,21 @@ git clone <repo-url>
 cd <repo-name>
 git lfs pull
 ```
+
+### Viewing Logs
+
+To view logs in the browser using the log viewer:
+
+```bash
+# Run the simple Python HTTP server
+python3 server.py
+
+# Or make it executable and run directly
+chmod +x server.py
+./server.py
+```
+
+Then open your browser and navigate to:
+- http://localhost:8000/log-viewer.html
+
+Press Ctrl+C to stop the server.
