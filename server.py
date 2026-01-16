@@ -27,7 +27,7 @@ def main():
     print(f"Starting HTTP server on http://localhost:{PORT}")
     print(f"Serving files from: {os.getcwd()}")
     print(f"\nOpen your browser and navigate to:")
-    print(f"  http://localhost:{PORT}/plugins/log-viewer.html")
+    print(f"  http://localhost:{PORT}/log-viewer.html")
     print("\nPress Ctrl+C to stop the server")
 
     with socketserver.TCPServer(("", PORT), CORSRequestHandler) as httpd:
